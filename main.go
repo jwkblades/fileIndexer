@@ -7,7 +7,6 @@ import "os"
 import "sync"
 import "container/list"
 import "io/ioutil"
-import "regexp"
 import "sort"
 import "strings"
 
@@ -41,73 +40,62 @@ func main() {
     fileQueue := list.New()
     fileQueueLock := &sync.Mutex{}
 
-    r, _ := regexp.Compile("\\.txt$")
     filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-        if r.MatchString(path) {
-            //fmt.Printf("Path: '%s'\n", path)
-            if (info.Mode() & os.ModeSymlink) == 0 {
-                fileQueueLock.Lock()
-                fileQueue.PushBack(path)
-                fileQueueLock.Unlock()
-                //fmt.Println("Added path: '", path, "' to queue")
-            }
+        if path[len(path)-4:] == ".txt" && (info.Mode() & os.ModeSymlink) == 0 {
+            fileQueue.PushBack(path)
         }
         return nil
     })
-    //fmt.Printf("Filesystem walk returned %v\n", err);
+
+    nextPath := func() string {
+        fileQueueLock.Lock()
+        defer fileQueueLock.Unlock()
+        var filePath string = ""
+
+        if fileQueue.Len() > 0 {
+            path := fileQueue.Front()
+            if path != nil && path.Value != nil {
+                filePath = path.Value.(string)
+            }
+            fileQueue.Remove(path)
+        }
+
+        return filePath
+    }
 
     wg.Add(*threads)
-    //fmt.Printf("Starting up %d threads\n", *threads)
     for i := 0; i < *threads; i++ {
         go func() {
-            //fmt.Println("Looking at entry ... in thread...")
+            defer wg.Done()
             threadWordMap := make(map[string]uint)
-            var path *list.Element = nil
             var filePath string = ""
             var word string = ""
 
             for fileQueue.Len() > 0 {
-                //fmt.Println("LOOPING fsCrawlCompleted: ", fsCrawlCompleted, ", queue length: ", fileQueue.Len())
-                filePath = ""
-                fileQueueLock.Lock()
-                path = nil
-                if fileQueue.Len() > 0 {
-                    path = fileQueue.Front()
-                    if path != nil && path.Value != nil {
-                        filePath = path.Value.(string)
-                    }
-                    fileQueue.Remove(path)
-                }
-                fileQueueLock.Unlock()
+                filePath = nextPath()
 
                 if filePath != "" {
-                    //fmt.Println("Looking at file: ", filePath)
                     contents, err := ioutil.ReadFile(filePath)
                     if err != nil {
                         continue
                     }
+                    contentString := strings.ToLower(string(contents))
 
-                    for i := range contents {
-                        var v byte = contents[i]
-                        //fmt.Println("Character: ", i, v)
+                    for i := range contentString {
+                        var v byte = contentString[i]
 
-                        if (v >= 'a' && v <= 'z') || (v >= 'A' && v <= 'Z') || (v >= '0' && v <= '9') {
+                        if (v >= 'a' && v <= 'z') || (v >= '0' && v <= '9') {
                             word += string([]byte{v})
                         } else if word != "" {
-                            word = strings.ToLower(word)
-                            //fmt.Println("Adding word: ", word)
                             threadWordMap[word]++
                             word = ""
                         }
                     }
 
                     if word != "" {
-                        word = strings.ToLower(word)
-                        //fmt.Println("Adding word: ", word)
                         threadWordMap[word]++
                         word = ""
                     }
-
                 }
             }
 
@@ -116,7 +104,6 @@ func main() {
             for k, v := range threadWordMap {
                 wordMap[k] += v
             }
-            wg.Done()
         }()
     }
 
